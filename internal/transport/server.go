@@ -62,7 +62,7 @@ func respondError(w http.ResponseWriter, err error) {
 			status = 400
 		case "not_found":
 			status = 404
-		case "conflict":
+		case "conflict", "rule_conflict":
 			status = 409
 		case "snapshot":
 			status = 410
@@ -82,6 +82,7 @@ func respondError(w http.ResponseWriter, err error) {
 func (s *Server) routes() {
 	const p = "/v1/lamina"
 	s.mux.HandleFunc("GET "+p+"/health", s.health)
+	s.mux.HandleFunc("GET "+p+"/collations", s.collations)
 	s.mux.HandleFunc("GET "+p+"/catalog", s.catalog)
 	s.mux.HandleFunc("POST "+p+"/relations", s.createRelation)
 	s.mux.HandleFunc("POST "+p+"/indexes", s.createIndex)

@@ -76,12 +76,15 @@ func (d *DB) Put(id, table string, row datum.Row, insertOnly bool) error {
 	if err != nil {
 		return invalid(err)
 	}
-	key := r.Key(normalized)
+	key, err := r.Key(normalized)
+	if err != nil {
+		return invalid(err)
+	}
 	rows := d.store.Scan(table, tx.Snapshot)
 	overlay(rows, tx.writes, table)
 	if insertOnly {
 		if _, ok := rows[key]; ok {
-			return fault("conflict", "primary already exists")
+			return fault("conflict", "primary already exists under collation %q", r.RuleOf(r.Primary))
 		}
 	}
 	if tx.writes[table] == nil {
@@ -130,7 +133,10 @@ func (d *DB) Delete(id, table string, value datum.Value) error {
 	if value.Null() || value.Kind != col.Type {
 		return fault("invalid", "invalid primary value")
 	}
-	key := value.Key()
+	key, err := value.IdentityKey(col.Rule())
+	if err != nil {
+		return invalid(err)
+	}
 	if tx.writes[table] == nil {
 		tx.writes[table] = map[string]staged{}
 	}

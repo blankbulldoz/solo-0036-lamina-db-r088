@@ -38,19 +38,33 @@ func (d *DB) apply(r journal.Record) error {
 			if err != nil {
 				return err
 			}
-			token := m.Relation + "\x00" + m.Key
-			if seen[token] {
-				return fmt.Errorf("duplicate mutation")
-			}
-			seen[token] = true
 			if !m.Deleted {
 				row, err := relation.Normalize(m.Row)
 				if err != nil {
 					return err
 				}
-				if relation.Key(row) != m.Key {
-					return fmt.Errorf("stored primary mismatch")
+				// Recompute identity from the raw primary under the declared
+				// collation instead of trusting the stored token. A mismatch
+				// means the on-disk frame was produced under a different rule
+				// version and must not silently alias two primary keys.
+				derived, err := relation.Key(row)
+				if err != nil {
+					return err
 				}
+				if derived != m.Key {
+					return fmt.Errorf("stored primary mismatch under collation %q", relation.RuleOf(relation.Primary))
+				}
+				token := m.Relation + "\x00" + derived
+				if seen[token] {
+					return fmt.Errorf("duplicate mutation")
+				}
+				seen[token] = true
+			} else {
+				token := m.Relation + "\x00" + m.Key
+				if seen[token] {
+					return fmt.Errorf("duplicate mutation")
+				}
+				seen[token] = true
 			}
 		}
 		d.store.Apply(r.Sequence, r.Writes)

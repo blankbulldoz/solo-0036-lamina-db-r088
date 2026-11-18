@@ -20,7 +20,7 @@ func Execute(r catalog.Relation, q Request, rows map[string]datum.Row, plan Plan
 			continue
 		}
 		result.Scanned++
-		if Matches(row, q.Where) {
+		if Matches(r, row, q.Where) {
 			selected = append(selected, row)
 		}
 	}
@@ -35,7 +35,7 @@ func Execute(r catalog.Relation, q Request, rows map[string]datum.Row, plan Plan
 	}
 	sort.Slice(selected, func(i, j int) bool {
 		for _, o := range q.Order {
-			n := datum.Order(selected[i][o.Column], selected[j][o.Column])
+			n := datum.RuleOrder(selected[i][o.Column], selected[j][o.Column], r.RuleOf(o.Column))
 			if n != 0 {
 				if o.Desc {
 					return n > 0
@@ -43,7 +43,7 @@ func Execute(r catalog.Relation, q Request, rows map[string]datum.Row, plan Plan
 				return n < 0
 			}
 		}
-		return datum.Order(selected[i][r.Primary], selected[j][r.Primary]) < 0
+		return datum.RuleOrder(selected[i][r.Primary], selected[j][r.Primary], r.RuleOf(r.Primary)) < 0
 	})
 	limit := q.Limit
 	if limit == 0 {

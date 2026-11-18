@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"fmt"
+	"lamina/internal/collate"
 	"lamina/internal/datum"
 	"regexp"
 )
@@ -11,9 +12,10 @@ var identifier = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
 func ValidName(s string) bool { return identifier.MatchString(s) }
 
 type Column struct {
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	Nullable bool   `json:"nullable"`
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	Nullable  bool   `json:"nullable"`
+	Collation string `json:"collation,omitempty"`
 }
 type Relation struct {
 	Name    string   `json:"name"`
@@ -21,6 +23,11 @@ type Relation struct {
 	Columns []Column `json:"columns"`
 	Created uint64   `json:"created"`
 }
+
+// Rule resolves the effective collation of a text column. Empty declarations
+// mean the frozen byte rule, so relations serialized before collation existed
+// keep their exact byte-wise identity and ordering.
+func (c Column) Rule() string { return collate.Effective(c.Collation) }
 
 func (r Relation) Validate() error {
 	if !ValidName(r.Name) || !ValidName(r.Primary) {
@@ -38,6 +45,14 @@ func (r Relation) Validate() error {
 		seen[c.Name] = true
 		if c.Type != "int" && c.Type != "text" && c.Type != "bool" {
 			return fmt.Errorf("unsupported type %q", c.Type)
+		}
+		if c.Collation != "" {
+			if c.Type != "text" {
+				return fmt.Errorf("collation is only valid on text columns (%s)", c.Name)
+			}
+			if !collate.Known(c.Collation) {
+				return fmt.Errorf("unknown text collation %q on %s", c.Collation, c.Name)
+			}
 		}
 		if c.Name == r.Primary {
 			found = true
@@ -84,4 +99,29 @@ func (r Relation) Normalize(row datum.Row) (datum.Row, error) {
 	}
 	return out, nil
 }
-func (r Relation) Key(row datum.Row) string { return row[r.Primary].Key() }
+
+// Key derives the stored identity token of a row's primary value under the
+// primary column's declared collation.
+func (r Relation) Key(row datum.Row) (string, error) {
+	col, _ := r.Column(r.Primary)
+	return row[r.Primary].IdentityKey(col.Rule())
+}
+
+// Token derives the identity token of any column value for unique constraint
+// and index purposes under that column's declared collation.
+func (r Relation) Token(column string, v datum.Value) (string, error) {
+	col, ok := r.Column(column)
+	if !ok {
+		return "", fmt.Errorf("unknown column %q", column)
+	}
+	return v.IdentityKey(col.Rule())
+}
+
+// RuleOf returns the collation governing a column, or the byte rule when the
+// column is absent or non-text.
+func (r Relation) RuleOf(column string) string {
+	if col, ok := r.Column(column); ok {
+		return col.Rule()
+	}
+	return collate.Byte
+}

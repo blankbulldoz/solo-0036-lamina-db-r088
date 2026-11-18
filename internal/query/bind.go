@@ -3,6 +3,7 @@ package query
 import (
 	"fmt"
 	"lamina/internal/catalog"
+	"lamina/internal/collate"
 	"lamina/internal/datum"
 )
 
@@ -60,7 +61,7 @@ func Bind(r catalog.Relation, q Request) error {
 	}
 	return nil
 }
-func Matches(row datum.Row, predicates []Predicate) bool {
+func Matches(r catalog.Relation, row datum.Row, predicates []Predicate) bool {
 	for _, p := range predicates {
 		v := row[p.Column]
 		if p.Op == "is_null" {
@@ -78,28 +79,77 @@ func Matches(row datum.Row, predicates []Predicate) bool {
 		if v.Null() || p.Value.Null() {
 			return false
 		}
-		n, err := v.Compare(p.Value)
+		rule := r.RuleOf(p.Column)
+		// Equality and its negation are identity questions. Text columns use the
+		// rule's folded identity so equivalent Unicode spellings match; non-text
+		// kinds keep their typed value comparison.
+		if p.Op == "=" || p.Op == "!=" {
+			var eq bool
+			var err error
+			if v.Kind == "text" {
+				eq, err = collate.Equal(rule, v.Text, p.Value.Text)
+			} else {
+				var cmp int
+				cmp, err = v.Compare(p.Value)
+				eq = cmp == 0
+			}
+			if err != nil {
+				return false
+			}
+			if (p.Op == "=") != eq {
+				return false
+			}
+			continue
+		}
+		// Ordering predicates compare identities for the inclusive boundary so
+		// the whole equivalent group is kept, matching the index bounds. Strict
+		// inequalities use the total order, whose raw-byte tie-break only orders
+		// spellings inside an identity group.
+		n, err := datum.TextCompare(v, p.Value, rule)
+		if err != nil {
+			return false
+		}
+		idCmp, err := identityCompare(rule, v, p.Value)
 		if err != nil {
 			return false
 		}
 		pass := false
 		switch p.Op {
-		case "=":
-			pass = n == 0
-		case "!=":
-			pass = n != 0
 		case "<":
 			pass = n < 0
 		case ">":
 			pass = n > 0
 		case "<=":
-			pass = n <= 0
+			pass = idCmp <= 0
 		case ">=":
-			pass = n >= 0
+			pass = idCmp >= 0
 		}
 		if !pass {
 			return false
 		}
 	}
 	return true
+}
+
+// identityCompare orders two values purely on their rule identities (-1, 0,
+// +1), without the raw-payload tie-break used by the display total order.
+func identityCompare(rule string, a, b datum.Value) (int, error) {
+	if a.Kind != "text" || b.Kind != "text" {
+		return a.Compare(b)
+	}
+	idA, err := collate.Identity(rule, a.Text)
+	if err != nil {
+		return 0, err
+	}
+	idB, err := collate.Identity(rule, b.Text)
+	if err != nil {
+		return 0, err
+	}
+	if idA < idB {
+		return -1, nil
+	}
+	if idA > idB {
+		return 1, nil
+	}
+	return 0, nil
 }

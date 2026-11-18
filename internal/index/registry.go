@@ -10,7 +10,12 @@ type Registry struct{ Trees map[string]*Tree }
 func Build(c *catalog.Catalog, s *versions.Store) *Registry {
 	r := &Registry{Trees: map[string]*Tree{}}
 	for name, definition := range c.Indexes {
-		tree := New()
+		relation, ok := c.Relations[definition.Relation]
+		rule := "byte"
+		if ok {
+			rule = relation.RuleOf(definition.Column)
+		}
+		tree := New(rule)
 		for key, chain := range s.Tables[definition.Relation] {
 			for _, v := range chain {
 				if !v.Deleted {
